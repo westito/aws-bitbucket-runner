@@ -1,0 +1,21 @@
+<configuration>
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>[%date{ISO8601}] %message%n</pattern>
+    </encoder>
+  </appender>
+  <root level="INFO">
+    <appender-ref ref="STDOUT" />
+  </root>
+  <logger name="com.atlassian.pipelines.runner" level="INFO" />
+  <logger name="build" level="INFO" />
+  <logger name="build.service.auth-proxy" level="OFF" />
+  <logger name="com.netflix" level="OFF" />
+  <logger name="com.atlassian.pipelines.stargate" level="OFF" />
+  <logger name="com.github.dockerjava" level="OFF" />
+  <!-- Suppress Brave/Zipkin trace logs -->
+  <logger name="brave" level="OFF" />
+  <logger name="brave.Tracer" level="OFF" />
+  <logger name="zipkin2" level="OFF" />
+  <logger name="org.springframework.cloud.sleuth" level="OFF" />
+</configuration>

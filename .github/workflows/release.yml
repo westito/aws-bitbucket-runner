@@ -1,0 +1,246 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME_DOCKER: westito/aws-bitbucket-runner-docker
+  IMAGE_NAME_SHELL: westito/aws-bitbucket-runner-shell
+  BITBUCKET_RUNNER_VERSION: "5.6.0"
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: echo "version=v$(cat VERSION)" >> $GITHUB_OUTPUT
+
+      - name: Version info
+        run: echo "Version - ${{ steps.version.outputs.version }}"
+
+  build-image-shell:
+    needs: version
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_SHELL }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.version.outputs.version }},enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./bitbucket-runner-shell/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            RUNNER_VERSION=${{ needs.version.outputs.version }}
+          cache-from: type=gha,scope=shell
+          cache-to: type=gha,mode=max,scope=shell
+
+  build-image-docker:
+    needs: version
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_DOCKER }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.version.outputs.version }},enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./bitbucket-runner-docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            RUNNER_VERSION=${{ needs.version.outputs.version }}
+          cache-from: type=gha,scope=docker
+          cache-to: type=gha,mode=max,scope=docker
+
+  runner-bundle-shell:
+    needs: version
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Bitbucket Runner
+        run: |
+          curl -sL "https://product-downloads.atlassian.com/software/bitbucket/pipelines/atlassian-bitbucket-pipelines-runner-${BITBUCKET_RUNNER_VERSION}.tar.gz" -o runner.tar.gz
+
+      - name: Create shell runner bundle
+        run: |
+          mkdir -p bundle/runner/scripts
+          tar -xzf runner.tar.gz -C bundle/runner
+          # Copy phase scripts
+          cp codebuild-runner-shell/*.sh bundle/runner/
+          # Copy shared scripts
+          cp shared/scripts/* bundle/runner/scripts/
+          # Copy shell-specific entrypoint
+          cp codebuild-runner-shell/scripts/codebuild-entrypoint.sh bundle/runner/scripts/
+          chmod +x bundle/runner/*.sh bundle/runner/scripts/*.sh
+          cd bundle && zip -r ../runner-shell.zip runner
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-bundle-shell
+          path: runner-shell.zip
+          retention-days: 1
+
+  runner-bundle-docker:
+    needs: version
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create docker runner bundle
+        run: |
+          mkdir -p bundle/runner/scripts
+          # Copy phase scripts
+          cp codebuild-runner-docker/*.sh bundle/runner/
+          # Copy shared scripts
+          cp shared/scripts/* bundle/runner/scripts/
+          # Copy docker-specific entrypoint
+          cp codebuild-runner-docker/scripts/codebuild-entrypoint.sh bundle/runner/scripts/
+          chmod +x bundle/runner/*.sh bundle/runner/scripts/*.sh
+          cd bundle && zip -r ../runner-docker.zip runner
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-bundle-docker
+          path: runner-docker.zip
+          retention-days: 1
+
+  release:
+    needs: [version, build-image-shell, build-image-docker, runner-bundle-shell, runner-bundle-docker]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download shell runner bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: runner-bundle-shell
+
+      - name: Download docker runner bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: runner-bundle-docker
+
+      - name: Create or update tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -fa "${{ needs.version.outputs.version }}" -m "Release ${{ needs.version.outputs.version }}"
+          git push origin "${{ needs.version.outputs.version }}" --force
+
+      - name: Delete existing release
+        run: gh release delete "${{ needs.version.outputs.version }}" --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate install scripts
+        run: |
+          # Generate install-shell.sh
+          sed 's/{{RUNNER_TYPE}}/shell/g; s/{{VERSION}}/${{ needs.version.outputs.version }}/g' install.sh > install-shell.sh
+          chmod +x install-shell.sh
+          # Generate install-docker.sh
+          sed 's/{{RUNNER_TYPE}}/docker/g; s/{{VERSION}}/${{ needs.version.outputs.version }}/g' install.sh > install-docker.sh
+          chmod +x install-docker.sh
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            runner-shell.zip
+            runner-docker.zip
+            install-shell.sh
+            install-docker.sh
+          tag_name: ${{ needs.version.outputs.version }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
