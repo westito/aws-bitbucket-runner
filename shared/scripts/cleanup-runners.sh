@@ -52,7 +52,8 @@ echo "$EXISTING_RUNNERS_JSON" | jq -c '.values[]? | select(type == "object")' | 
     fi
     
     # Get runner's labels sorted - check labels first to skip unrelated runners
-    RUNNER_LABELS_SORTED=$(echo "$runner" | jq -r '[.labels[]?.name // empty] | sort | join(",")')
+    # Labels can be either strings or objects with .name property
+    RUNNER_LABELS_SORTED=$(echo "$runner" | jq -r '[.labels[]? | if type == "string" then . elif type == "object" then .name // empty else empty end] | sort | join(",")')
     if [ "$RUNNER_LABELS_SORTED" != "$OUR_LABELS_SORTED" ]; then
       continue
     fi

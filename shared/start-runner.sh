@@ -227,9 +227,11 @@ if [ -n "$CODEBUILD_IMAGE" ]; then
 fi
 
 # Start CodeBuild using --cli-input-json (with retry for concurrency limit)
+# CODEBUILD_QUEUE_RETRIES: max retry attempts (default: 60)
+# CODEBUILD_QUEUE_INTERVAL: seconds between retries (default: 30)
 echo "Starting CodeBuild..."
-MAX_RETRIES=60
-RETRY_INTERVAL=10
+MAX_RETRIES=${CODEBUILD_QUEUE_RETRIES:-60}
+RETRY_INTERVAL=${CODEBUILD_QUEUE_INTERVAL:-30}
 RETRY_COUNT=0
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
