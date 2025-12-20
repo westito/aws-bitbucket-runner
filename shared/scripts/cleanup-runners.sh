@@ -42,22 +42,31 @@ fi
 # Convert our labels to sorted array for comparison
 OUR_LABELS_SORTED=$(echo "$RUNNER_LABELS" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
 
-# Process each runner
+# Process each runner - only cleanup OFFLINE/UNREGISTERED runners with matching labels
+# Valid states: UNREGISTERED, ONLINE, OFFLINE, DISABLED, ENABLED
 echo "$EXISTING_RUNNERS_JSON" | jq -c '.values[]? | select(type == "object")' | while read -r runner; do
   if [ -n "$runner" ]; then
     OLD_RUNNER_UUID=$(echo "$runner" | jq -r '.uuid // empty')
     if [ -z "$OLD_RUNNER_UUID" ]; then
       continue
     fi
-    # Get runner's labels sorted
-    RUNNER_LABELS_SORTED=$(echo "$runner" | jq -r '[.labels[]?.name // empty] | sort | join(",")')
     
-    # Only delete if labels match exactly
-    if [ "$RUNNER_LABELS_SORTED" = "$OUR_LABELS_SORTED" ]; then
-      OLD_RUNNER_UUID_ENCODED=$(echo "$OLD_RUNNER_UUID" | sed 's/{/%7B/g; s/}/%7D/g')
-      echo "  Deleting old runner: ${OLD_RUNNER_UUID} (labels: ${RUNNER_LABELS_SORTED})"
-      curl -s --connect-timeout 10 --max-time 30 -X DELETE -H "Authorization: ${AUTH_HEADER}" "${RUNNERS_URL}/${OLD_RUNNER_UUID_ENCODED}" || true
+    # Get runner's labels sorted - check labels first to skip unrelated runners
+    RUNNER_LABELS_SORTED=$(echo "$runner" | jq -r '[.labels[]?.name // empty] | sort | join(",")')
+    if [ "$RUNNER_LABELS_SORTED" != "$OUR_LABELS_SORTED" ]; then
+      continue
     fi
+    
+    # Check runner state - only delete OFFLINE or UNREGISTERED runners
+    RUNNER_STATE=$(echo "$runner" | jq -r '.state.status // "UNKNOWN"')
+    if [ "$RUNNER_STATE" != "OFFLINE" ] && [ "$RUNNER_STATE" != "UNREGISTERED" ]; then
+      echo "  Skipping runner: ${OLD_RUNNER_UUID} (state: ${RUNNER_STATE})"
+      continue
+    fi
+    
+    OLD_RUNNER_UUID_ENCODED=$(echo "$OLD_RUNNER_UUID" | sed 's/{/%7B/g; s/}/%7D/g')
+    echo "  Deleting runner: ${OLD_RUNNER_UUID} (state: ${RUNNER_STATE})"
+    curl -s --connect-timeout 10 --max-time 30 -X DELETE -H "Authorization: ${AUTH_HEADER}" "${RUNNERS_URL}/${OLD_RUNNER_UUID_ENCODED}" || true
   fi
 done
 
